@@ -1,0 +1,22 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Compute asr error",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/compute_asr_errors.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--ref", "/Users/lixiyang/Desktop/model_output/lookup_table.csv",
+                "--whisper_dir", "/Users/lixiyang/Desktop/model_output/whisper_output",
+                "--firered_dir", "/Users/lixiyang/Desktop/model_output/fireRed_output",
+                "--out_dir", "${workspaceFolder}/results"
+            ],
+        }
+    ]
+}
