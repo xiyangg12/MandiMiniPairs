@@ -100,6 +100,11 @@ def edit_distance(seq_a: List[str], seq_b: List[str]) -> int:
     d, _ = _levenshtein_alignment(seq_a, seq_b)
     return d
 
+def edit_distance_based_on_ref(seq_a: List[str], seq_b: List[str]) -> int:
+    d, alignment = _levenshtein_alignment(seq_a, seq_b)
+    num_ref_none = sum(1 for x in alignment if x[0] is None)
+    return d - num_ref_none
+
 # -------------------------
 # Pinyin + tone handling
 # -------------------------
@@ -132,8 +137,8 @@ def pinyin_error_rate(ref_text: str, hyp_text: str) -> float:
     hyp = to_pinyin_syllables(hyp_text)
     if len(ref) == 0:
         return 0.0 if len(hyp) == 0 else 1.0
-    dist = edit_distance(ref, hyp)
-    return dist / max(1, len(ref))
+    dist = edit_distance_based_on_ref(ref, hyp)
+    return dist / max(1, len(ref)), ref, hyp
 
 def tone_error_rate(ref_text: str, hyp_text: str) -> float:
     ref = to_pinyin_syllables(ref_text)
@@ -203,7 +208,29 @@ def collect_ids(refs: Dict[str, str]) -> List[str]:
             base_ids.add(k[:-1])
     return sorted(base_ids)
 
-def compute_metrics(ref_words, hyp_words) -> Dict[str, float]:
+def log_metrics(ref, hyp, metrics, log_path="debug_metrics_log.csv"):
+    """
+    Appends a row to the debug metrics log file.
+    Columns: ref, hyp, wer, cer, pinyin, tone
+    """
+    file_exists = os.path.isfile(log_path)
+    with open(log_path, "a", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["ref", "hyp", "wer", "cer", "pinyin", "tone", "ref_pinyin", "hyp_pinyin"])
+        writer.writerow([
+            ref, 
+            hyp, 
+            metrics["wer"], 
+            metrics["cer"], 
+            metrics["pinyin"], 
+            metrics["tone"], 
+            " ".join(metrics.get("ref_pinyin", "")), 
+            " ".join(metrics.get("hyp_pinyin", ""))
+            ]
+        )
+        
+def compute_metrics(ref_words, hyp_words, short_sentence) -> Dict[str, float]:
     """
     Returns dict with keys: wer, cer, pinyin, tone
     """
@@ -211,17 +238,26 @@ def compute_metrics(ref_words, hyp_words) -> Dict[str, float]:
         wer_val = 0.0 if len(hyp_words) == 0 else 1.0
     else:
         wer_val = wer(" ".join(ref_words), " ".join(hyp_words))
-    cer_val = edit_distance(list("".join(ref_words)), list("".join(hyp_words)))
+    cer_val = edit_distance_based_on_ref(list("".join(ref_words)), list("".join(hyp_words)))
     cer_den = max(1, len(ref_words))
     cer_rate = cer_val / cer_den
-    pinyin_rate = pinyin_error_rate("".join(ref_words), "".join(hyp_words))
+    pinyin_rate, ref_pinyin, hyp_pinyin = pinyin_error_rate("".join(ref_words), "".join(hyp_words))
     tone_rate = tone_error_rate("".join(ref_words), "".join(hyp_words))
-    return {
-        "wer": round(wer_val, 2),
-        "cer": round(cer_rate, 2),
-        "pinyin": round(pinyin_rate, 2),
-        "tone": round(tone_rate, 2),
+    result = {
+        "wer": round(wer_val, 3),
+        "cer": round(cer_rate, 3),
+        "pinyin": round(pinyin_rate, 3),
+        "tone": round(tone_rate, 3),
     }
+    log_result = result.copy()
+    log_result["ref_pinyin"] = ref_pinyin
+    log_result["hyp_pinyin"] = hyp_pinyin
+    if short_sentence:
+        for key in result:
+            log_result[key] = "-"
+    # Log for debugging
+    log_metrics("".join(ref_words), "".join(hyp_words), log_result)
+    return result
 
 
 # -------------------------
@@ -251,11 +287,14 @@ def compute_metrics_for_item(
         hyps = hyp.split("\n")
         for hyp in hyps:
             hyp_words = char_tokens(hyp)
+            short_sentence = len(hyp_words) < len(ref_words)
+            result = compute_metrics(ref_words, hyp_words, short_sentence)
+            if short_sentence:
+                continue
             for key in metrics:
-                result = compute_metrics(ref_words, hyp_words)
                 metrics[key].append(result[key])
         
-        out[ab] = {key: round(np.mean(metric),2) for key, metric in metrics.items()}
+        out[ab] = {key: round(np.mean(metric),3) for key, metric in metrics.items()}
     return out
 
 # -------------------------
