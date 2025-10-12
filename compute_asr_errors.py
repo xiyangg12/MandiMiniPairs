@@ -287,7 +287,7 @@ def compute_metrics_for_item(
         hyps = hyp.split("\n")
         for hyp in hyps:
             hyp_words = char_tokens(hyp)
-            short_sentence = len(hyp_words) < len(ref_words)
+            short_sentence = len(hyp_words) != len(ref_words)
             result = compute_metrics(ref_words, hyp_words, short_sentence)
             if short_sentence:
                 continue
@@ -338,6 +338,13 @@ def main():
     ap.add_argument("--firered_dir", required=True, help="Directory containing FireRed transcripts (001a.txt etc.)")
     ap.add_argument("--out_dir", required=True, help="Where to write CSVs")
     args = ap.parse_args()
+
+    output_dir = args.out_dir
+    for filename in os.listdir(output_dir):
+        file_path = os.path.join(output_dir, filename)
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+    os.remove("debug_metrics_log.csv") if os.path.exists("debug_metrics_log.csv") else None
 
     refs = load_references(args.ref)
     items = collect_ids(refs)
