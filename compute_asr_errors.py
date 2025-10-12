@@ -191,6 +191,16 @@ def load_references(path: str) -> Dict[str, str]:
                 refs[k] = row["text"].strip()
     return refs
 
+def get_mini_pairs_ref(refs: Dict[str, str]) -> Dict[str, str]:
+    mini_pairs = {}
+    for i in range(int(len(refs)/2)):
+        ref_a = refs[f"{(i+1):03d}a"]
+        ref_b = refs[f"{(i+1):03d}b"]
+        ref_a_pinyin = to_pinyin_syllables(ref_a)
+        ref_b_pinyin = to_pinyin_syllables(ref_b)
+        mini_pairs[f"{(i+1):03d}"] = [i for i, (a, b) in enumerate(zip(ref_a_pinyin, ref_b_pinyin)) if a != b]
+    return mini_pairs
+
 def read_txt_or_none(path: str) -> str:
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -208,7 +218,7 @@ def collect_ids(refs: Dict[str, str]) -> List[str]:
             base_ids.add(k[:-1])
     return sorted(base_ids)
 
-def log_metrics(ref, hyp, metrics, log_path="debug_metrics_log.csv"):
+def log_metrics(ref, hyp, metrics, pair_id, log_path="debug_metrics_log.csv"):
     """
     Appends a row to the debug metrics log file.
     Columns: ref, hyp, wer, cer, pinyin, tone
@@ -217,8 +227,9 @@ def log_metrics(ref, hyp, metrics, log_path="debug_metrics_log.csv"):
     with open(log_path, "a", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["ref", "hyp", "wer", "cer", "pinyin", "tone", "ref_pinyin", "hyp_pinyin"])
+            writer.writerow(["ID", "ref", "hyp", "wer", "cer", "pinyin", "tone", "ref_pinyin", "hyp_pinyin"])
         writer.writerow([
+            pair_id,
             ref, 
             hyp, 
             metrics["wer"], 
@@ -230,7 +241,7 @@ def log_metrics(ref, hyp, metrics, log_path="debug_metrics_log.csv"):
             ]
         )
         
-def compute_metrics(ref_words, hyp_words, short_sentence) -> Dict[str, float]:
+def compute_metrics(ref_words, hyp_words, short_sentence, pair_id) -> Dict[str, float]:
     """
     Returns dict with keys: wer, cer, pinyin, tone
     """
@@ -256,7 +267,7 @@ def compute_metrics(ref_words, hyp_words, short_sentence) -> Dict[str, float]:
         for key in result:
             log_result[key] = "-"
     # Log for debugging
-    log_metrics("".join(ref_words), "".join(hyp_words), log_result)
+    log_metrics("".join(ref_words), "".join(hyp_words), log_result, pair_id)
     return result
 
 
@@ -264,9 +275,10 @@ def compute_metrics(ref_words, hyp_words, short_sentence) -> Dict[str, float]:
 # Metrics per (model, a/b)
 # -------------------------
 def compute_metrics_for_item(
-    item_base: str,
+    pair_id: str,
     refs: Dict[str, str],
     model_dir: str,
+    mini_pairs: Dict[str, List[int]],
 ) -> Dict[str, Dict[str, float]]:
     """
     Returns:
@@ -277,21 +289,29 @@ def compute_metrics_for_item(
     Missing transcripts are treated as empty string (max error).
     """
     out = {}
+    pair_char_index = mini_pairs[pair_id]
     for ab in ("a", "b"):
-        key = f"{item_base}{ab}"
-        ref = refs.get(key, "")
-        hyp = read_txt_or_none(os.path.join(model_dir, f"{key}.txt")) or ""
+        pair_id_ab = f"{pair_id}{ab}"
+        ref = refs.get(pair_id_ab, "")
+        hyp = read_txt_or_none(os.path.join(model_dir, f"{pair_id_ab}.txt")) or ""
         # WER: for Chinese, use character tokens as "words"
         ref_words = char_tokens(ref)
-        metrics = {"wer": [], "cer": [], "pinyin": [], "tone": []}
+        metrics = {}
         hyps = hyp.split("\n")
         for hyp in hyps:
             hyp_words = char_tokens(hyp)
             short_sentence = len(hyp_words) != len(ref_words)
-            result = compute_metrics(ref_words, hyp_words, short_sentence)
+            result = compute_metrics(ref_words, hyp_words, short_sentence, pair_id=pair_id_ab)
             if short_sentence:
                 continue
-            for key in metrics:
+            hyp_words_mini_pairs = [hyp_words[index] for index in pair_char_index]
+            ref_words_mini_pairs = [ref_words[index] for index in pair_char_index]
+            result_mini_pairs = compute_metrics(ref_words_mini_pairs, hyp_words_mini_pairs, short_sentence, pair_id=pair_id_ab)
+            result_mini_pairs = {f"mini_{k}": v for k, v in result_mini_pairs.items()}
+            result.update(result_mini_pairs)
+            for key in result:
+                if key not in metrics:
+                    metrics[key] = []
                 metrics[key].append(result[key])
         
         out[ab] = {key: round(np.mean(metric),3) for key, metric in metrics.items()}
@@ -306,6 +326,7 @@ def write_metric_csv(
     whisper_metrics: Dict[str, Dict[str, float]],
     firered_metrics: Dict[str, Dict[str, float]],
     metric_name: str,
+    extra_metric_name: str = None
 ):
     """
     Writes CSV with columns:
@@ -314,7 +335,10 @@ def write_metric_csv(
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["item", "whisper_a", "whisper_b", "firered_a", "firered_b"])
+        first_row = ["item", "whisper_a", "whisper_b", "firered_a", "firered_b"]
+        if extra_metric_name:
+            first_row += [f"whisper_a_{extra_metric_name}", f"whisper_b_{extra_metric_name}", f"firered_a_{extra_metric_name}", f"firered_b_{extra_metric_name}"]
+        writer.writerow(first_row)
         for item in items:
             w = whisper_metrics[item]
             r = firered_metrics[item]
@@ -325,6 +349,13 @@ def write_metric_csv(
                 r["a"][metric_name],
                 r["b"][metric_name],
             ]
+            if extra_metric_name:
+                row += [
+                    w["a"][extra_metric_name],
+                    w["b"][extra_metric_name],
+                    r["a"][extra_metric_name],
+                    r["b"][extra_metric_name],
+                ]
             writer.writerow(row)
 
 # TODO: add tone into the table
@@ -348,6 +379,7 @@ def main():
 
     refs = load_references(args.ref)
     items = collect_ids(refs)
+    mini_pairs = get_mini_pairs_ref(refs)
     if not items:
         raise SystemExit("No items found in references. Expect ids like 001a / 001b.")
 
@@ -355,15 +387,16 @@ def main():
     firered_metrics = {}
 
     for item in items:
-        whisper_metrics[item] = compute_metrics_for_item(item, refs, args.whisper_dir)
-        firered_metrics[item] = compute_metrics_for_item(item, refs, args.firered_dir)
+        whisper_metrics[item] = compute_metrics_for_item(item, refs, args.whisper_dir, mini_pairs)
+        firered_metrics[item] = compute_metrics_for_item(item, refs, args.firered_dir, mini_pairs)
 
-    write_metric_csv(os.path.join(args.out_dir, "wer.csv"), items, whisper_metrics, firered_metrics, "wer")
-    write_metric_csv(os.path.join(args.out_dir, "cer.csv"), items, whisper_metrics, firered_metrics, "cer")
-    write_metric_csv(os.path.join(args.out_dir, "pinyin_error.csv"), items, whisper_metrics, firered_metrics, "pinyin")
-    write_metric_csv(os.path.join(args.out_dir, "tone_error.csv"), items, whisper_metrics, firered_metrics, "tone")
+    write_metric_csv(os.path.join(args.out_dir, "wer.csv"), items, whisper_metrics, firered_metrics, "wer", "mini_wer")
+    write_metric_csv(os.path.join(args.out_dir, "cer.csv"), items, whisper_metrics, firered_metrics, "cer", "mini_cer")
+    write_metric_csv(os.path.join(args.out_dir, "pinyin_error.csv"), items, whisper_metrics, firered_metrics, "pinyin", "mini_pinyin")
+    write_metric_csv(os.path.join(args.out_dir, "tone_error.csv"), items, whisper_metrics, firered_metrics, "tone", "mini_tone")
 
     print(f"Done. Wrote: {args.out_dir}/wer.csv, cer.csv, pinyin_error.csv, tone_error.csv")
 
 if __name__ == "__main__":
     main()
+
