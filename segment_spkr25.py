@@ -14,7 +14,7 @@ TIER_NAME_PREFERRED = None
 SKIP_LABELS = {"sil", "sp", "pause"}
 MIN_DUR = 0.15            # seconds; skip very short
 SILENCE_PADDING = 0.5     # seconds on each side
-EXPECTED_SPEAKERS = 17    # for audit only
+EXPECTED_SPEAKERS = 25    # for audit only
 # ----------------------------------------
 
 _non_cjk = re.compile(r"[^\u4e00-\u9fff，。！？、“”‘’（）《》——…·：；、\s]")

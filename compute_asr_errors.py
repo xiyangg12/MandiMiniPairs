@@ -8,7 +8,6 @@ import re
 from collections import defaultdict, OrderedDict
 from typing import Dict, List, Tuple
 import numpy as np
-
 from jiwer import wer
 from pypinyin import pinyin, Style
 import pkuseg
@@ -326,7 +325,9 @@ def write_metric_csv(
     whisper_metrics: Dict[str, Dict[str, float]],
     firered_metrics: Dict[str, Dict[str, float]],
     metric_name: str,
-    extra_metric_name: str = None
+    extra_metric_name: str,
+    whisper_means: Dict[str, Dict[str, float]],
+    firered_means: Dict[str, Dict[str, float]],
 ):
     """
     Writes CSV with columns:
@@ -335,9 +336,9 @@ def write_metric_csv(
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        first_row = ["item", "whisper_a", "whisper_b", "firered_a", "firered_b"]
+        first_row = ["item", "whisper_a(%)", "whisper_b(%)", "firered_a(%)", "firered_b(%)"]
         if extra_metric_name:
-            first_row += [f"whisper_a_{extra_metric_name}", f"whisper_b_{extra_metric_name}", f"firered_a_{extra_metric_name}", f"firered_b_{extra_metric_name}"]
+            first_row += [f"whisper_a_{extra_metric_name}(%)", f"whisper_b_{extra_metric_name}(%)", f"firered_a_{extra_metric_name}(%)", f"firered_b_{extra_metric_name}(%)"]
         writer.writerow(first_row)
         for item in items:
             w = whisper_metrics[item]
@@ -356,9 +357,45 @@ def write_metric_csv(
                     r["a"][extra_metric_name],
                     r["b"][extra_metric_name],
                 ]
+            row = [f"{v*100:.1f}" if isinstance(v, float) else v for v in row]
             writer.writerow(row)
+        writer.writerow([""])
+        writer.writerow([
+            "Mean",
+            f"{whisper_means[metric_name]['a']*100:.1f}",
+            f"{whisper_means[metric_name]['b']*100:.1f}",
+            f"{firered_means[metric_name]['a']*100:.1f}",
+            f"{firered_means[metric_name]['b']*100:.1f}",
+        ] + ([
+            f"{whisper_means[extra_metric_name]['a']*100:.1f}",
+            f"{whisper_means[extra_metric_name]['b']*100:.1f}",
+            f"{firered_means[extra_metric_name]['a']*100:.1f}",
+            f"{firered_means[extra_metric_name]['b']*100:.1f}",
+        ] if extra_metric_name else []))
+        a = 1
 
-# TODO: add tone into the table
+def get_metrics_mean_values(
+    metrics_names: List[str],
+    whisper_metrics: Dict[str, Dict[str, float]],
+    firered_metrics: Dict[str, Dict[str, float]]
+):
+    whisper_means = {}
+    firered_means = {}
+    for metric in metrics_names:
+        whisper_a_vals = [whisper_metrics[item]["a"].get(metric, 0.0) for item in whisper_metrics]
+        whisper_b_vals = [whisper_metrics[item]["b"].get(metric, 0.0) for item in whisper_metrics]
+        firered_a_vals = [firered_metrics[item]["a"].get(metric, 0.0) for item in firered_metrics]
+        firered_b_vals = [firered_metrics[item]["b"].get(metric, 0.0) for item in firered_metrics]
+        whisper_means[metric] = {
+            "a": round(np.mean(whisper_a_vals), 3),
+            "b": round(np.mean(whisper_b_vals), 3)
+        }
+        firered_means[metric] = {
+            "a": round(np.mean(firered_a_vals), 3),
+            "b": round(np.mean(firered_b_vals), 3)
+        }
+    return whisper_means, firered_means
+    
 # -------------------------
 # Main
 # -------------------------
@@ -390,10 +427,13 @@ def main():
         whisper_metrics[item] = compute_metrics_for_item(item, refs, args.whisper_dir, mini_pairs)
         firered_metrics[item] = compute_metrics_for_item(item, refs, args.firered_dir, mini_pairs)
 
-    write_metric_csv(os.path.join(args.out_dir, "wer.csv"), items, whisper_metrics, firered_metrics, "wer", "mini_wer")
-    write_metric_csv(os.path.join(args.out_dir, "cer.csv"), items, whisper_metrics, firered_metrics, "cer", "mini_cer")
-    write_metric_csv(os.path.join(args.out_dir, "pinyin_error.csv"), items, whisper_metrics, firered_metrics, "pinyin", "mini_pinyin")
-    write_metric_csv(os.path.join(args.out_dir, "tone_error.csv"), items, whisper_metrics, firered_metrics, "tone", "mini_tone")
+    metrics_names = ["wer", "cer", "pinyin", "tone", "mini_wer", "mini_cer", "mini_pinyin", "mini_tone"]
+    whisper_means, firered_means = get_metrics_mean_values(metrics_names, whisper_metrics, firered_metrics)
+
+    write_metric_csv(os.path.join(args.out_dir, "wer.csv"), items, whisper_metrics, firered_metrics, "wer", "mini_wer", whisper_means, firered_means)
+    write_metric_csv(os.path.join(args.out_dir, "cer.csv"), items, whisper_metrics, firered_metrics, "cer", "mini_cer", whisper_means, firered_means)
+    write_metric_csv(os.path.join(args.out_dir, "pinyin_error.csv"), items, whisper_metrics, firered_metrics, "pinyin", "mini_pinyin", whisper_means, firered_means)
+    write_metric_csv(os.path.join(args.out_dir, "tone_error.csv"), items, whisper_metrics, firered_metrics, "tone", "mini_tone", whisper_means, firered_means)
 
     print(f"Done. Wrote: {args.out_dir}/wer.csv, cer.csv, pinyin_error.csv, tone_error.csv")
 
