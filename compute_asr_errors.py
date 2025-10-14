@@ -240,7 +240,7 @@ def log_metrics(ref, hyp, metrics, pair_id, log_path="debug_metrics_log.csv"):
             ]
         )
         
-def compute_metrics(ref_words, hyp_words, short_sentence, pair_id) -> Dict[str, float]:
+def compute_metrics(ref_words, hyp_words, pair_id) -> Dict[str, float]:
     """
     Returns dict with keys: wer, cer, pinyin, tone
     """
@@ -262,9 +262,6 @@ def compute_metrics(ref_words, hyp_words, short_sentence, pair_id) -> Dict[str, 
     log_result = result.copy()
     log_result["ref_pinyin"] = ref_pinyin
     log_result["hyp_pinyin"] = hyp_pinyin
-    if short_sentence:
-        for key in result:
-            log_result[key] = "-"
     # Log for debugging
     log_metrics("".join(ref_words), "".join(hyp_words), log_result, pair_id)
     return result
@@ -299,14 +296,18 @@ def compute_metrics_for_item(
         hyps = hyp.split("\n")
         for hyp in hyps:
             hyp_words = char_tokens(hyp)
-            short_sentence = len(hyp_words) != len(ref_words)
-            result = compute_metrics(ref_words, hyp_words, short_sentence, pair_id=pair_id_ab)
-            if short_sentence:
-                continue
-            hyp_words_mini_pairs = [hyp_words[index] for index in pair_char_index]
-            ref_words_mini_pairs = [ref_words[index] for index in pair_char_index]
-            result_mini_pairs = compute_metrics(ref_words_mini_pairs, hyp_words_mini_pairs, short_sentence, pair_id=pair_id_ab)
-            result_mini_pairs = {f"mini_{k}": v for k, v in result_mini_pairs.items()}
+            result = compute_metrics(ref_words, hyp_words, pair_id=pair_id_ab)
+            # Dedicated metrics for mini pairs
+            _, alignment = _levenshtein_alignment(ref_words, hyp_words)
+            ref_words_aligned = [r for r, h in alignment]
+            hyp_words_aligned = [h for r, h in alignment]
+            hyp_words_mini_pairs = [hyp_words_aligned[index] for index in pair_char_index]
+            ref_words_mini_pairs = [ref_words_aligned[index] for index in pair_char_index]
+            if None in ref_words_mini_pairs or None in hyp_words_mini_pairs:
+                result_mini_pairs = {k : 1.0 for k in result_mini_pairs}
+            else:
+                result_mini_pairs = compute_metrics(ref_words_mini_pairs, hyp_words_mini_pairs, pair_id=pair_id_ab)
+                result_mini_pairs = {f"mini_{k}": v for k, v in result_mini_pairs.items()}
             result.update(result_mini_pairs)
             for key in result:
                 if key not in metrics:
