@@ -6,15 +6,17 @@ import soundfile as sf
 from praatio import tgio
 
 # ---------- CONFIG (EDIT THESE) ----------
-REF_FILE  = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/mandarin_sst.txt"
-AUDIO_DIR = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/long_audio"
-TG_DIR    = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/textgrid"
+AUDIO_DIR = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/raw_data/mandarin"
+TG_DIR    = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/raw_data/mandarin_textgrid"
 OUT_DIR   = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/seg_pair25"
+EXPECTED_SPEAKERS = 25    # for audit only
+
+REF_FILE  = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/mandarin_sst.txt"
 TIER_NAME_PREFERRED = None
 SKIP_LABELS = {"sil", "sp", "pause"}
 MIN_DUR = 0.15            # seconds; skip very short
 SILENCE_PADDING = 0.5     # seconds on each side
-EXPECTED_SPEAKERS = 25    # for audit only
+
 # ----------------------------------------
 
 _non_cjk = re.compile(r"[^\u4e00-\u9fff，。！？、“”‘’（）《》——…·：；、\s]")
@@ -66,7 +68,7 @@ def cut_wav(wav_path: str, start: float, end: float, out_path: str) -> float:
     return dur
 
 def main():
-    lookup = build_lookup(REF_FILE)
+    # lookup = build_lookup(REF_FILE)
 
     counters = {}        # pair_id -> next index int (1-based)
     cleaned_pair = set() # which pair dirs cleaned already

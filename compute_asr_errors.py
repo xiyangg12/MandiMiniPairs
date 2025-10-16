@@ -99,10 +99,6 @@ def edit_distance(seq_a: List[str], seq_b: List[str]) -> int:
     d, _ = _levenshtein_alignment(seq_a, seq_b)
     return d
 
-def edit_distance_based_on_ref(seq_a: List[str], seq_b: List[str]) -> int:
-    d, alignment = _levenshtein_alignment(seq_a, seq_b)
-    num_ref_none = sum(1 for x in alignment if x[0] is None)
-    return d - num_ref_none
 
 # -------------------------
 # Pinyin + tone handling
@@ -136,7 +132,7 @@ def pinyin_error_rate(ref_text: str, hyp_text: str) -> float:
     hyp = to_pinyin_syllables(hyp_text)
     if len(ref) == 0:
         return 0.0 if len(hyp) == 0 else 1.0
-    dist = edit_distance_based_on_ref(ref, hyp)
+    dist = edit_distance(ref, hyp)
     return dist / max(1, len(ref)), ref, hyp
 
 def tone_error_rate(ref_text: str, hyp_text: str) -> float:
@@ -149,6 +145,7 @@ def tone_error_rate(ref_text: str, hyp_text: str) -> float:
     count_ref_positions = 0
     for r, h in align:
         if r is None:
+            mismatches += 1
             # insertion into hyp; counts against ref length implicitly
             continue
         count_ref_positions += 1
@@ -240,7 +237,7 @@ def log_metrics(ref, hyp, metrics, pair_id, log_path="debug_metrics_log.csv"):
             ]
         )
         
-def compute_metrics(ref_words, hyp_words, pair_id) -> Dict[str, float]:
+def compute_metrics(ref_words, hyp_words, pair_id, file_name) -> Dict[str, float]:
     """
     Returns dict with keys: wer, cer, pinyin, tone
     """
@@ -248,7 +245,7 @@ def compute_metrics(ref_words, hyp_words, pair_id) -> Dict[str, float]:
         wer_val = 0.0 if len(hyp_words) == 0 else 1.0
     else:
         wer_val = wer(" ".join(ref_words), " ".join(hyp_words))
-    cer_val = edit_distance_based_on_ref(list("".join(ref_words)), list("".join(hyp_words)))
+    cer_val = edit_distance(list("".join(ref_words)), list("".join(hyp_words)))
     cer_den = max(1, len(ref_words))
     cer_rate = cer_val / cer_den
     pinyin_rate, ref_pinyin, hyp_pinyin = pinyin_error_rate("".join(ref_words), "".join(hyp_words))
@@ -263,7 +260,7 @@ def compute_metrics(ref_words, hyp_words, pair_id) -> Dict[str, float]:
     log_result["ref_pinyin"] = ref_pinyin
     log_result["hyp_pinyin"] = hyp_pinyin
     # Log for debugging
-    log_metrics("".join(ref_words), "".join(hyp_words), log_result, pair_id)
+    log_metrics("".join(ref_words), "".join(hyp_words), log_result, pair_id, file_name)
     return result
 
 
@@ -275,6 +272,7 @@ def compute_metrics_for_item(
     refs: Dict[str, str],
     model_dir: str,
     mini_pairs: Dict[str, List[int]],
+    debug_log_file_name="debug_metrics_log.csv"
 ) -> Dict[str, Dict[str, float]]:
     """
     Returns:
@@ -296,7 +294,7 @@ def compute_metrics_for_item(
         hyps = hyp.split("\n")
         for hyp in hyps:
             hyp_words = char_tokens(hyp)
-            result = compute_metrics(ref_words, hyp_words, pair_id=pair_id_ab)
+            result = compute_metrics(ref_words, hyp_words, pair_id=pair_id_ab, file_name=debug_log_file_name)
             # Dedicated metrics for mini pairs
             _, alignment = _levenshtein_alignment(ref_words, hyp_words)
             ref_words_aligned = [r for r, h in alignment]
@@ -306,7 +304,7 @@ def compute_metrics_for_item(
             if None in ref_words_mini_pairs or None in hyp_words_mini_pairs:
                 result_mini_pairs = {k : 1.0 for k in result_mini_pairs}
             else:
-                result_mini_pairs = compute_metrics(ref_words_mini_pairs, hyp_words_mini_pairs, pair_id=pair_id_ab)
+                result_mini_pairs = compute_metrics(ref_words_mini_pairs, hyp_words_mini_pairs, pair_id=pair_id_ab, file_name=debug_log_file_name)
                 result_mini_pairs = {f"mini_{k}": v for k, v in result_mini_pairs.items()}
             result.update(result_mini_pairs)
             for key in result:
@@ -413,7 +411,8 @@ def main():
         file_path = os.path.join(output_dir, filename)
         if os.path.isfile(file_path):
             os.remove(file_path)
-    os.remove("debug_metrics_log.csv") if os.path.exists("debug_metrics_log.csv") else None
+    os.remove("debug_metrics_log_whisper.csv") if os.path.exists("debug_metrics_log_whisper.csv") else None
+    os.remove("debug_metrics_log_firered.csv") if os.path.exists("debug_metrics_log_firered.csv") else None
 
     refs = load_references(args.ref)
     items = collect_ids(refs)
@@ -425,8 +424,8 @@ def main():
     firered_metrics = {}
 
     for item in items:
-        whisper_metrics[item] = compute_metrics_for_item(item, refs, args.whisper_dir, mini_pairs)
-        firered_metrics[item] = compute_metrics_for_item(item, refs, args.firered_dir, mini_pairs)
+        whisper_metrics[item] = compute_metrics_for_item(item, refs, args.whisper_dir, mini_pairs, debug_log_file_name="debug_metrics_log_whisper.csv")
+        firered_metrics[item] = compute_metrics_for_item(item, refs, args.firered_dir, mini_pairs, debug_log_file_name="debug_metrics_log_firered.csv")
 
     metrics_names = ["wer", "cer", "pinyin", "tone", "mini_wer", "mini_cer", "mini_pinyin", "mini_tone"]
     whisper_means, firered_means = get_metrics_mean_values(metrics_names, whisper_metrics, firered_metrics)
