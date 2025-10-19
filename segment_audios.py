@@ -6,10 +6,10 @@ import soundfile as sf
 from praatio import tgio
 
 # ---------- CONFIG (EDIT THESE) ----------
-AUDIO_DIR = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/raw_data/mandarin"
-TG_DIR    = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/raw_data/mandarin_textgrid"
-OUT_DIR   = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/seg_pair25"
-EXPECTED_SPEAKERS = 25    # for audit only
+AUDIO_DIR = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/raw_data/CHD_SST/audios"
+TG_DIR    = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/raw_data/CHD_SST/textgrid"
+OUT_DIR   = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/seg_chd" 
+EXPECTED_SPEAKERS = 5    # for audit only
 
 REF_FILE  = "/Users/lixiyang/Desktop/mandi_mini_pairs/mandi_minipair_data/mandarin_sst.txt"
 TIER_NAME_PREFERRED = None
@@ -68,7 +68,7 @@ def cut_wav(wav_path: str, start: float, end: float, out_path: str) -> float:
     return dur
 
 def main():
-    # lookup = build_lookup(REF_FILE)
+    lookup = build_lookup(REF_FILE)
 
     counters = {}        # pair_id -> next index int (1-based)
     cleaned_pair = set() # which pair dirs cleaned already

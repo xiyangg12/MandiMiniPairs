@@ -407,6 +407,7 @@ def main():
     args = ap.parse_args()
 
     output_dir = args.out_dir
+    os.makedirs(output_dir, exist_ok=True)
     for filename in os.listdir(output_dir):
         file_path = os.path.join(output_dir, filename)
         if os.path.isfile(file_path):
