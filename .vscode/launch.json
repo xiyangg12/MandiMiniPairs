@@ -6,16 +6,29 @@
     "configurations": [
 
         {
+            "name": "Compute asr error for mini pairs",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/compute_asr_errors_minipairs.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--ref", "/Users/lixiyang/Desktop/model_output/lookup_table.csv",
+                "--whisper_dir", "/Users/lixiyang/Desktop/model_output/whisper_JNN",
+                "--firered_dir", "/Users/lixiyang/Desktop/model_output/fireRedASR_JNN",
+                "--out_dir", "${workspaceFolder}/results_JNN"
+            ],
+        },
+        {
             "name": "Compute asr error",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/compute_asr_errors.py",
             "console": "integratedTerminal",
             "args": [
-                "--ref", "/Users/lixiyang/Desktop/model_output/lookup_table.csv",
-                "--whisper_dir", "/Users/lixiyang/Desktop/model_output/whisper_CHD",
-                "--firered_dir", "/Users/lixiyang/Desktop/model_output/fireRedASR_CHD",
-                "--out_dir", "${workspaceFolder}/results_CHD"
+                "--ref", "/Users/lixiyang/Desktop/KeSpeech/Metadata/phase1.text",
+                "--whisper_dir", "/Users/lixiyang/Desktop/KeSpeech/ASR_results/Jinan/output_whisper_KeSpeech_Jinan.txt",
+                "--firered_dir", "/Users/lixiyang/Desktop/KeSpeech/ASR_results/Jinan/output_fireredasr_KeSpeech_Jinan.txt",
+                "--out_dir", "/Users/lixiyang/Desktop/KeSpeech/ASR_results/Jinan_metrics"
             ],
         }
     ]

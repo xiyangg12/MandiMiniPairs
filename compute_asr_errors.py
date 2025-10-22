@@ -166,7 +166,7 @@ def tone_error_rate(ref_text: str, hyp_text: str) -> float:
 # -------------------------
 # I/O helpers
 # -------------------------
-def load_references(path: str) -> Dict[str, str]:
+def read_id_text_pairs(path: str) -> Dict[str, str]:
     """
     Returns dict mapping id like '001a' -> text.
     If CSV: expects header with columns id,text.
@@ -181,10 +181,20 @@ def load_references(path: str) -> Dict[str, str]:
                     refs[key] = f.read().strip()
     else:
         with open(path, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                k = row["pair_num"].strip() + row["label"].strip()
-                refs[k] = row["text"].strip()
+            if ".csv" in path:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    uttid, ref_rext = row.split()
+                    refs[uttid] = ref_rext
+            elif (".text" in path) or (".txt" in path):
+                for line in f:
+                    line = line.strip()  # remove newline & spaces
+                    if not line:  # skip empty lines
+                        continue
+                    id, text = line.split(" ", 1)  # split only on the first space
+                    if ".wav" in id:
+                        id = id.replace(".wav", "")
+                    refs[id] = text
     return refs
 
 def get_mini_pairs_ref(refs: Dict[str, str]) -> Dict[str, str]:
@@ -214,7 +224,7 @@ def collect_ids(refs: Dict[str, str]) -> List[str]:
             base_ids.add(k[:-1])
     return sorted(base_ids)
 
-def log_metrics(ref, hyp, metrics, pair_id, log_path="debug_metrics_log.csv"):
+def log_metrics(uttid, ref, hyp, metrics, log_path):
     """
     Appends a row to the debug metrics log file.
     Columns: ref, hyp, wer, cer, pinyin, tone
@@ -225,7 +235,7 @@ def log_metrics(ref, hyp, metrics, pair_id, log_path="debug_metrics_log.csv"):
         if not file_exists:
             writer.writerow(["ID", "ref", "hyp", "wer", "cer", "pinyin", "tone", "ref_pinyin", "hyp_pinyin"])
         writer.writerow([
-            pair_id,
+            uttid,
             ref, 
             hyp, 
             metrics["wer"], 
@@ -237,7 +247,7 @@ def log_metrics(ref, hyp, metrics, pair_id, log_path="debug_metrics_log.csv"):
             ]
         )
         
-def compute_metrics(ref_words, hyp_words, pair_id, file_name, add_mapping=False) -> Dict[str, float]:
+def compute_metrics(uttid, ref_words, hyp_words, debug_log_path, add_mapping=False) -> Dict[str, float]:
     """
     Returns dict with keys: wer, cer, pinyin, tone
     """
@@ -260,7 +270,7 @@ def compute_metrics(ref_words, hyp_words, pair_id, file_name, add_mapping=False)
     log_result["ref_pinyin"] = ref_pinyin
     log_result["hyp_pinyin"] = hyp_pinyin
     # Log for debugging
-    log_metrics("".join(ref_words), "".join(hyp_words), log_result, pair_id, file_name)
+    log_metrics(uttid, "".join(ref_words), "".join(hyp_words), log_result, debug_log_path)
     # Add tone mapping.
     if not add_mapping:
         return result
@@ -277,13 +287,7 @@ def compute_metrics(ref_words, hyp_words, pair_id, file_name, add_mapping=False)
 # -------------------------
 # Metrics per (model, a/b)
 # -------------------------
-def compute_metrics_for_item(
-    pair_id: str,
-    refs: Dict[str, str],
-    model_dir: str,
-    mini_pairs: Dict[str, List[int]],
-    debug_log_file_name="debug_metrics_log.csv"
-) -> Dict[str, Dict[str, float]]:
+def compute_model_output_metrics(ref_path: str, hyp_path: str, debug_log_path: str) -> Dict[str, float]:
     """
     Returns:
       {
@@ -292,141 +296,68 @@ def compute_metrics_for_item(
       }
     Missing transcripts are treated as empty string (max error).
     """
-    out = {}
-    pair_char_index = mini_pairs[pair_id]
-    for ab in ("a", "b"):
-        pair_id_ab = f"{pair_id}{ab}"
-        ref = refs.get(pair_id_ab, "")
-        hyp = read_txt_or_none(os.path.join(model_dir, f"{pair_id_ab}.txt")) or ""
+    metrics = {}
+    refs = read_id_text_pairs(ref_path)
+    hyps = read_id_text_pairs(hyp_path)
+    for uttid, hyp_text in hyps.items():
         # WER: for Chinese, use character tokens as "words"
-        ref_words = char_tokens(ref)
-        metrics = {}
-        hyps = hyp.split("\n")
-        for hyp in hyps:
-            hyp_words = char_tokens(hyp)
-            result = compute_metrics(ref_words, hyp_words, pair_id=pair_id_ab, file_name=debug_log_file_name, add_mapping=True)
-            # Dedicated metrics for mini pairs
-            _, alignment = _levenshtein_alignment(ref_words, hyp_words)
-            ref_words_aligned = [r for r, h in alignment]
-            hyp_words_aligned = [h for r, h in alignment]
-            hyp_words_mini_pairs = [hyp_words_aligned[index] for index in pair_char_index]
-            ref_words_mini_pairs = [ref_words_aligned[index] for index in pair_char_index]
-            if None in ref_words_mini_pairs or None in hyp_words_mini_pairs:
-                result_mini_pairs = {k : 1.0 for k in result_mini_pairs}
-            else:
-                result_mini_pairs = compute_metrics(ref_words_mini_pairs, hyp_words_mini_pairs, pair_id=pair_id_ab, file_name=debug_log_file_name)
-                result_mini_pairs = {f"mini_{k}": v for k, v in result_mini_pairs.items()}
-            result.update(result_mini_pairs)
-            for key in result:
-                
-                if isinstance(result[key], float):
-                    if key not in metrics:
-                        metrics[key] = []
-                    metrics[key].append(result[key])
-                elif key == "tone_mapping":
-                    if "tone_mapping" not in metrics:
-                        metrics["tone_mapping"] = np.empty((2,0), dtype=int)
-                    metrics["tone_mapping"] = np.hstack((metrics["tone_mapping"], result["tone_mapping"]))
-        
-        out[ab] = {}
-        for key, metric in metrics.items():
-            if key == "tone_mapping":
-                if "tone_mapping" not in out[ab]:
-                    out[ab]["tone_mapping"] = np.empty((2,0), dtype=int)
-                out[ab]["tone_mapping"] = np.hstack((out[ab]["tone_mapping"], metric))
-            else:
-                out[ab][key] = round(np.mean(metric), 3)
-    return out
+        if uttid not in refs:
+            raise ValueError(f"Utterance id {uttid} not found in references.")
+        ref_text = refs[uttid]
+        ref_words = char_tokens(ref_text)
+        hyp_words = char_tokens(hyp_text)
+        result = compute_metrics(uttid, ref_words, hyp_words, debug_log_path=debug_log_path, add_mapping=True)
+        for key in result:
+            if isinstance(result[key], float):
+                if key not in metrics:
+                    metrics[key] = []
+                metrics[key].append(result[key])
+            elif key == "tone_mapping":
+                if "tone_mapping" not in metrics:
+                    metrics["tone_mapping"] = np.empty((2,0), dtype=int)
+                metrics["tone_mapping"] = np.hstack((metrics["tone_mapping"], result["tone_mapping"]))
 
-def get_metrics_mean_values(
-    metrics_names: List[str],
-    whisper_metrics: Dict[str, Dict[str, float]],
-    firered_metrics: Dict[str, Dict[str, float]]
-):
-    whisper_means = {}
-    firered_means = {}
-    for metric in metrics_names:
-        whisper_a_vals = [whisper_metrics[item]["a"].get(metric, 0.0) for item in whisper_metrics]
-        whisper_b_vals = [whisper_metrics[item]["b"].get(metric, 0.0) for item in whisper_metrics]
-        firered_a_vals = [firered_metrics[item]["a"].get(metric, 0.0) for item in firered_metrics]
-        firered_b_vals = [firered_metrics[item]["b"].get(metric, 0.0) for item in firered_metrics]
-        whisper_means[metric] = {
-            "a": round(np.mean(whisper_a_vals), 3),
-            "b": round(np.mean(whisper_b_vals), 3)
-        }
-        firered_means[metric] = {
-            "a": round(np.mean(firered_a_vals), 3),
-            "b": round(np.mean(firered_b_vals), 3)
-        }
-    return whisper_means, firered_means
+    return metrics
+
+def get_metrics_mean_values(metrics: Dict[str, float]):
+    means = {}
+    for metric_name, metric in metrics.items():
+        if isinstance(metric, list) and len(metric) > 0 and isinstance(metric[0], float):
+            means[metric_name] = np.mean(metric)
+    return means
 
 # -------------------------
 # Writers
 # -------------------------
 def write_metric_csv(
-    out_path: str,
-    items: List[str],
-    whisper_metrics: Dict[str, Dict[str, float]],
-    firered_metrics: Dict[str, Dict[str, float]],
-    metric_name: str,
-    extra_metric_name: str,
-    whisper_means: Dict[str, Dict[str, float]],
-    firered_means: Dict[str, Dict[str, float]],
+    out_dir: str,
+    out_file_name: str,
+    metric_names: str,
+    metrics: Dict[str, float],
+    metric_means: Dict[str, float],
 ):
     """
     Writes CSV with columns:
       item, whisper_a, whisper_b, firered_a, firered_b
     """
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(out_path, "w", encoding="utf-8", newline="") as f:
+    os.makedirs(os.path.dirname(out_dir), exist_ok=True)
+    file_path = os.path.join(out_dir, f"{out_file_name}.csv")
+    with open(file_path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        first_row = ["item", "whisper_a(%)", "whisper_b(%)", "firered_a(%)", "firered_b(%)"]
-        if extra_metric_name:
-            first_row += [f"whisper_a_{extra_metric_name}(%)", f"whisper_b_{extra_metric_name}(%)", f"firered_a_{extra_metric_name}(%)", f"firered_b_{extra_metric_name}(%)"]
-        writer.writerow(first_row)
-        for item in items:
-            w = whisper_metrics[item]
-            r = firered_metrics[item]
-            row = [
-                item,
-                w["a"][metric_name],
-                w["b"][metric_name],
-                r["a"][metric_name],
-                r["b"][metric_name],
-            ]
-            if extra_metric_name:
-                row += [
-                    w["a"][extra_metric_name],
-                    w["b"][extra_metric_name],
-                    r["a"][extra_metric_name],
-                    r["b"][extra_metric_name],
-                ]
-            row = [f"{v*100:.1f}" if isinstance(v, float) else v for v in row]
-            writer.writerow(row)
-        writer.writerow([""])
-        writer.writerow([
-            "Mean",
-            f"{whisper_means[metric_name]['a']*100:.1f}",
-            f"{whisper_means[metric_name]['b']*100:.1f}",
-            f"{firered_means[metric_name]['a']*100:.1f}",
-            f"{firered_means[metric_name]['b']*100:.1f}",
-        ] + ([
-            f"{whisper_means[extra_metric_name]['a']*100:.1f}",
-            f"{whisper_means[extra_metric_name]['b']*100:.1f}",
-            f"{firered_means[extra_metric_name]['a']*100:.1f}",
-            f"{firered_means[extra_metric_name]['b']*100:.1f}",
-        ] if extra_metric_name else []))
+        writer.writerow(["item", "value"])
+        for metric_name in metric_names:
+            mean_value = metric_means.get(metric_name, 0.0)
+            writer.writerow([metric_name, f"{mean_value:.4f}"])
+    print(f"✅ Wrote metrics to {file_path}")
 
 def compute_and_write_confusion_matrix(metrics: dict, out_path: str):
     """
     Computes confusion matrix from tone_mapping and writes to CSV.
     """
     tone_mapping = np.empty((2,0), dtype=int)
-
-    for metric in metrics.values():
-        for ab in ("a", "b"):
-            tone_mapping = np.hstack((tone_mapping, metric[ab]["tone_mapping"]))
-
+    if "tone_mapping" not in metrics:
+        raise ValueError("No tone_mapping found in metrics.")
+    tone_mapping = metrics["tone_mapping"]
     ref_tones = tone_mapping[0]
     hyp_tones = tone_mapping[1]
     max_tone = max(np.max(ref_tones), np.max(hyp_tones))
@@ -460,35 +391,15 @@ def main():
 
     output_dir = args.out_dir
     os.makedirs(output_dir, exist_ok=True)
-    for filename in os.listdir(output_dir):
-        file_path = os.path.join(output_dir, filename)
-        if os.path.isfile(file_path):
-            os.remove(file_path)
-    os.remove("debug_metrics_log_whisper.csv") if os.path.exists("debug_metrics_log_whisper.csv") else None
-    os.remove("debug_metrics_log_firered.csv") if os.path.exists("debug_metrics_log_firered.csv") else None
+    whisper_metrics = compute_model_output_metrics(args.ref, args.whisper_dir, os.path.join(output_dir, "debug_metrics_log_whisper.csv"))
+    firered_metrics = compute_model_output_metrics(args.ref, args.firered_dir, os.path.join(output_dir, "debug_metrics_log_firered.csv"))
 
-    refs = load_references(args.ref)
-    items = collect_ids(refs)
-    mini_pairs = get_mini_pairs_ref(refs)
-    if not items:
-        raise SystemExit("No items found in references. Expect ids like 001a / 001b.")
+    whisper_means = get_metrics_mean_values(whisper_metrics)
+    firered_means = get_metrics_mean_values(firered_metrics)
 
-    whisper_metrics = {}
-    firered_metrics = {}
-
-    for item in items:
-        whisper_metrics[item] = compute_metrics_for_item(item, refs, args.whisper_dir, mini_pairs, debug_log_file_name="debug_metrics_log_whisper.csv")
-        firered_metrics[item] = compute_metrics_for_item(item, refs, args.firered_dir, mini_pairs, debug_log_file_name="debug_metrics_log_firered.csv")
-
-    metrics_names = ["wer", "cer", "pinyin", "tone", "mini_wer", "mini_cer", "mini_pinyin", "mini_tone"]
-    whisper_means, firered_means = get_metrics_mean_values(metrics_names, whisper_metrics, firered_metrics)
-
-    write_metric_csv(os.path.join(args.out_dir, "wer.csv"), items, whisper_metrics, firered_metrics, "wer", "mini_wer", whisper_means, firered_means)
-    write_metric_csv(os.path.join(args.out_dir, "cer.csv"), items, whisper_metrics, firered_metrics, "cer", "mini_cer", whisper_means, firered_means)
-    write_metric_csv(os.path.join(args.out_dir, "pinyin_error.csv"), items, whisper_metrics, firered_metrics, "pinyin", "mini_pinyin", whisper_means, firered_means)
-    write_metric_csv(os.path.join(args.out_dir, "tone_error.csv"), items, whisper_metrics, firered_metrics, "tone", "mini_tone", whisper_means, firered_means)
-
-    print(f"✅ Wrote: {args.out_dir}/wer.csv, cer.csv, pinyin_error.csv, tone_error.csv")
+    metrics_names = list(whisper_means.keys())
+    write_metric_csv(args.out_dir, "output_whisper", metrics_names, whisper_metrics, whisper_means)    
+    write_metric_csv(args.out_dir, "output_fireredasr", metrics_names, firered_metrics, firered_means)
 
     # Confusion matrices
     compute_and_write_confusion_matrix(whisper_metrics, os.path.join(args.out_dir, "whisper_tone_confusion_matrix.csv"))
